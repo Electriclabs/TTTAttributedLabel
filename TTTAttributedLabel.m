@@ -26,6 +26,9 @@
 
 NSString * const kTTTStrikeOutAttributeName = @"TTTStrikeOutAttribute";
 
+NSString *const kTTTBackgroundColour = @"kTTTBackgroundColour";
+
+
 static inline CTTextAlignment CTTextAlignmentFromUITextAlignment(UITextAlignment alignment) {
 	switch (alignment) {
 		case UITextAlignmentLeft: return kCTLeftTextAlignment;
@@ -85,7 +88,7 @@ static inline NSDictionary * NSAttributedStringAttributesFromLabel(TTTAttributed
     CGFloat leftMargin = label.textInsets.left;
     CGFloat rightMargin = label.textInsets.right;
     CGFloat firstLineIndent = label.firstLineIndent + leftMargin;
-
+    
     CTLineBreakMode lineBreakMode;
     if (label.numberOfLines != 1) {
         lineBreakMode = CTLineBreakModeFromUILineBreakMode(UILineBreakModeWordWrap);
@@ -105,7 +108,7 @@ static inline NSDictionary * NSAttributedStringAttributesFromLabel(TTTAttributed
         {.spec = kCTParagraphStyleSpecifierHeadIndent, .valueSize = sizeof(CGFloat), .value = (const void *)&leftMargin},
         {.spec = kCTParagraphStyleSpecifierTailIndent, .valueSize = sizeof(CGFloat), .value = (const void *)&rightMargin}
 	};
-
+    
     CTParagraphStyleRef paragraphStyle = CTParagraphStyleCreate(paragraphStyles, 9);
 	[mutableAttributes setObject:(id)paragraphStyle forKey:(NSString *)kCTParagraphStyleAttributeName];
 	CFRelease(paragraphStyle);
@@ -144,6 +147,7 @@ static inline NSAttributedString * NSAttributedStringByScalingFontSize(NSAttribu
 - (NSUInteger)characterIndexAtPoint:(CGPoint)p;
 - (void)drawFramesetter:(CTFramesetterRef)framesetter textRange:(CFRange)textRange inRect:(CGRect)rect context:(CGContextRef)c;
 - (void)drawStrike:(CTFrameRef)frame inRect:(CGRect)rect context:(CGContextRef)c;
+- (void) drawBackground:(CTFrameRef)frame inRect:(CGRect)rect context:(CGContextRef)c;
 - (void)handleTap:(UITapGestureRecognizer *)gestureRecognizer;
 @end
 
@@ -339,7 +343,7 @@ static inline NSAttributedString * NSAttributedStringByScalingFontSize(NSAttribu
     
     // Convert tap coordinates (start at top left) to CT coordinates (start at bottom left)
     p = CGPointMake(p.x, textRect.size.height - p.y);
-
+    
     CGMutablePathRef path = CGPathCreateMutable();
     CGPathAddRect(path, NULL, textRect);
     CTFrameRef frame = CTFramesetterCreateFrame(self.framesetter, CFRangeMake(0, [self.attributedText length]), path, NULL);
@@ -347,7 +351,7 @@ static inline NSAttributedString * NSAttributedStringByScalingFontSize(NSAttribu
         CFRelease(path);
         return NSNotFound;
     }
-
+    
     CFArrayRef lines = CTFrameGetLines(frame);
     NSUInteger numberOfLines = CFArrayGetCount(lines);
     if (numberOfLines == 0) {
@@ -355,10 +359,10 @@ static inline NSAttributedString * NSAttributedStringByScalingFontSize(NSAttribu
         CFRelease(path);
         return NSNotFound;
     }
-
+    
     CGPoint lineOrigins[numberOfLines];
     CTFrameGetLineOrigins(frame, CFRangeMake(0, 0), lineOrigins);
-
+    
     NSUInteger lineIndex;
     for (lineIndex = 0; lineIndex < (numberOfLines - 1); lineIndex++) {
         CGPoint lineOrigin = lineOrigins[lineIndex];
@@ -366,19 +370,19 @@ static inline NSAttributedString * NSAttributedStringByScalingFontSize(NSAttribu
             break;
         }
     }
-
+    
     if (lineIndex >= numberOfLines) {
         CFRelease(frame);
         CFRelease(path);
         return NSNotFound;
     }
-
+    
     CGPoint lineOrigin = lineOrigins[lineIndex];
     CTLineRef line = CFArrayGetValueAtIndex(lines, lineIndex);
     // Convert CT coordinates to line-relative coordinates
     CGPoint relativePoint = CGPointMake(p.x - lineOrigin.x, p.y - lineOrigin.y);
     CFIndex idx = CTLineGetStringIndexForPosition(line, relativePoint);
-
+    
     // We should check if we are outside the string range
     CFIndex glyphCount = CTLineGetGlyphCount(line);
     CFRange stringRange = CTLineGetStringRange(line);
@@ -391,7 +395,7 @@ static inline NSAttributedString * NSAttributedStringByScalingFontSize(NSAttribu
     
     CFRelease(frame);
     CFRelease(path);
-        
+    
     return idx;
 }
 
@@ -400,6 +404,8 @@ static inline NSAttributedString * NSAttributedStringByScalingFontSize(NSAttribu
     
     CGPathAddRect(path, NULL, rect);
     CTFrameRef frame = CTFramesetterCreateFrame(framesetter, textRange, path, NULL);    
+    
+    [self drawBackground:frame inRect:rect context:c];
     
     CFArrayRef lines = CTFrameGetLines(frame);
     NSUInteger numberOfLines = self.numberOfLines > 0 ? MIN(self.numberOfLines, CFArrayGetCount(lines)) : CFArrayGetCount(lines);
@@ -453,7 +459,7 @@ static inline NSAttributedString * NSAttributedStringByScalingFontSize(NSAttribu
                 lastLineRange.length = CFAttributedStringGetLength((CFAttributedStringRef)self.attributedText) - lastLineRange.location;
                 CFAttributedStringRef truncationString = CFAttributedStringCreateWithSubstring(kCFAllocatorDefault, (CFAttributedStringRef)self.attributedText, lastLineRange);
                 CTLineRef truncationLine = CTLineCreateWithAttributedString(truncationString);
-
+                
                 // Truncate the line in case it is too long.
                 CTLineRef truncatedLine = CTLineCreateTruncatedLine(truncationLine, rect.size.width, truncationType, truncationToken);
                 if (!truncatedLine) {
@@ -473,12 +479,53 @@ static inline NSAttributedString * NSAttributedStringByScalingFontSize(NSAttribu
             CTLineDraw(line, c);
         }
     }
-
+    
     [self drawStrike:frame inRect:rect context:c];
     
     CFRelease(frame);
     CFRelease(path);
 }
+
+
+- (void) drawBackground:(CTFrameRef)frame inRect:(CGRect)rect context:(CGContextRef)c {
+    NSArray *lines = (NSArray *)CTFrameGetLines(frame);
+    CGPoint origins[[lines count]];
+    CTFrameGetLineOrigins(frame, CFRangeMake(0, 0), origins);
+    
+    NSUInteger lineIndex = 0;
+    for (id line in lines) {        
+        CGRect lineBounds = CTLineGetImageBounds((CTLineRef)line, c);
+        lineBounds.origin.x = origins[lineIndex].x;
+        lineBounds.origin.y = origins[lineIndex].y;
+        
+        for (id glyphRun in (NSArray *)CTLineGetGlyphRuns((CTLineRef)line)) {
+            NSDictionary *attributes = (NSDictionary *)CTRunGetAttributes((CTRunRef) glyphRun);
+            CGColorRef colour = (CGColorRef)[attributes objectForKey:kTTTBackgroundColour];
+            
+            if (colour) {
+                CGRect runBounds = CGRectZero;
+                CGFloat ascent = 0.0f;
+                CGFloat descent = 0.0f;
+                
+                runBounds.size.width = CTRunGetTypographicBounds((CTRunRef)glyphRun, CFRangeMake(0, 0), &ascent, &descent, NULL);
+                runBounds.size.height = ascent + descent;
+                
+                CGFloat xOffset = CTLineGetOffsetForStringIndex((CTLineRef)line, CTRunGetStringRange((CTRunRef)glyphRun).location, NULL);
+                runBounds.origin.x = origins[lineIndex].x + rect.origin.x + xOffset;
+                runBounds.origin.y = origins[lineIndex].y + rect.origin.y;
+                runBounds.origin.y -= descent;
+                
+                CGContextSetFillColorWithColor(c, (CGColorRef)[UIColor yellowColor].CGColor );
+                CGContextFillRect(c, runBounds);
+                
+            }
+            
+        }
+        lineIndex++;
+    }
+}
+
+
 
 - (void)drawStrike:(CTFrameRef)frame inRect:(CGRect)rect context:(CGContextRef)c {
     NSArray *lines = (NSArray *)CTFrameGetLines(frame);
@@ -527,7 +574,7 @@ static inline NSAttributedString * NSAttributedStringByScalingFontSize(NSAttribu
                 
                 // Use text color, or default to black
                 id color = [attributes objectForKey:(id)kCTForegroundColorAttributeName];
-
+                
                 if (color) {
                     CGContextSetStrokeColorWithColor(c, (CGColorRef)color);
                 } else {
@@ -557,14 +604,14 @@ static inline NSAttributedString * NSAttributedStringByScalingFontSize(NSAttribu
     }
     
     self.attributedText = text;
-
+    
     self.links = [NSArray array];
     if (self.dataDetectorTypes != UIDataDetectorTypeNone) {
         for (NSTextCheckingResult *result in [self detectedLinksInString:[self.attributedText string] range:NSMakeRange(0, [text length]) error:nil]) {
             [self addLinkWithTextCheckingResult:result];
         }
     }
-        
+    
     [super setText:[self.attributedText string]];
 }
 
@@ -614,7 +661,7 @@ static inline NSAttributedString * NSAttributedStringByScalingFontSize(NSAttribu
     
     CGContextRef c = UIGraphicsGetCurrentContext();
     CGContextSetTextMatrix(c, CGAffineTransformIdentity);
-
+    
     // Inverts the CTM to match iOS coordinates (otherwise text draws upside-down; Mac OS's system is different)
     CGRect textRect = rect;
     CGContextTranslateCTM(c, 0.0f, textRect.size.height);
@@ -622,7 +669,7 @@ static inline NSAttributedString * NSAttributedStringByScalingFontSize(NSAttribu
     
     CFRange textRange = CFRangeMake(0, [self.attributedText length]);
     CFRange fitRange;
-
+    
     // First, adjust the text to be in the center vertically, if the text size is smaller than the drawing rect
     CGSize textSize = CTFramesetterSuggestFrameSizeWithConstraints(self.framesetter, textRange, NULL, textRect.size, &fitRange);
     textSize = CGSizeMake(ceilf(textSize.width), ceilf(textSize.height)); // Fix for iOS 4, CTFramesetterSuggestFrameSizeWithConstraints sometimes returns fractional sizes
@@ -644,7 +691,7 @@ static inline NSAttributedString * NSAttributedStringByScalingFontSize(NSAttribu
         textRect.origin = CGPointMake(textRect.origin.x, textRect.origin.y + yOffset);
         textRect.size = CGSizeMake(textRect.size.width, textRect.size.height - heightChange + yOffset);
     }
-
+    
     // Second, trace the shadow before the actual text, if we have one
     if (self.shadowColor && !self.highlighted) {
         CGContextSetShadowWithColor(c, self.shadowOffset, self.shadowRadius, [self.shadowColor CGColor]);

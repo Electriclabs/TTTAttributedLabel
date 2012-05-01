@@ -37,6 +37,12 @@ typedef enum {
  */
 extern NSString * const kTTTStrikeOutAttributeName;
 
+/**
+ Determines whether the text to which this attribute applies has a background highlight
+ */
+
+extern NSString * const kTTTBackgroundColour;
+
 @protocol TTTAttributedLabelDelegate;
 
 // Override UILabel @property to accept both NSString and NSAttributedString
